@@ -12,7 +12,7 @@ if(MPI_FOUND)
   include_directories(${MPI_INCLUDE_PATH})
 endif()
 
-add_executable(mpi_hello_world mpi_hello_world.c)
+add_executable(mpi_hello_world mpi_hello_world.cpp)
 target_link_libraries(mpi_hello_world ${MPI_LIBRARIES})
 
 
@@ -31,3 +31,4 @@ endif()
 
 
 add_executable(dtasker dtasker.cpp)
+target_link_libraries(dtasker ${MPI_LIBRARIES})

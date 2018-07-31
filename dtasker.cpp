@@ -2,37 +2,10 @@
 #include <functional>
 #include <iostream>
 #include <numeric>
-#include <sstream>
 #include <vector>
 
-#include <omp.h>
-
-template <typename MakeSplitters, typename Process, typename Reduce>
-auto run(MakeSplitters &make_splitters, Process &process, Reduce &reduce, size_t n) {
-    auto splitters = make_splitters(n);
-
-    std::vector<std::stringstream> oss(splitters.size());
-    std::vector<std::istream *> piss;
-    for (auto &ss : oss) {
-        piss.push_back(&ss);
-    }
-
-#pragma omp parallel for
-    for (size_t i = 0; i < splitters.size(); ++i) {
-        auto &splitter = splitters[i];
-        std::stringstream ss;
-        bool more = false;
-        do {
-            more = splitter(ss, 0);
-            process(ss, oss[i], 0);
-        } while (more);
-    }
-
-    std::vector<size_t> nodes(oss.size(), 0);
-    auto result = reduce(piss, nodes);
-
-    return result;
-}
+#include "dtasker.hpp"
+#include "dtasker_mpi.hpp"
 
 const size_t N = 100000;
 int data[N];
@@ -63,9 +36,10 @@ int main() {
 
     auto process = [&](std::istream &is, std::ostream &os, size_t node) -> void {
         std::cout << "process run" << std::endl;
-        size_t begin, end;
         long long int sum = 0;
-        while (is >> begin >> end) {
+        while (is.peek() != EOF) {
+            size_t begin, end;
+            is >> begin >> end;
             for (size_t i = begin; i < end; ++i) {
                 sum += data[i];
             }
@@ -73,7 +47,7 @@ int main() {
         os << sum;
     };
 
-    auto reduce = [&](const std::vector<std::istream *> &piss, const std::vector<size_t> &nodes) {
+    auto reduce = [&](const std::vector<std::istream *> &piss, const std::vector<int> &nodes) {
         long long int sum = 0;
         for (auto &pis : piss) {
             long long int local_sum;
@@ -84,8 +58,28 @@ int main() {
         return sum;
     };
 
-    auto result = run(make_splitters, process, reduce, 4);
-    std::cout << result << std::endl;
+    {
+        auto result = run_omp(make_splitters, process, reduce, 4);
+        std::cout << result << std::endl;
+    }
+
+    {
+        // Initialize the MPI environment
+        MPI_Init(NULL, NULL);
+        // Get the number of processes
+        int world_size;
+        MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+        auto presult = run_mpi(make_splitters, process, reduce, world_size);
+        // Get the rank of the process
+        int world_rank;
+        MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+        if (world_rank == 0) {
+            std::cout << "MPI!!!!!!" << std::endl;
+            std::cout << *presult << std::endl;
+        }
+        // Finalize the MPI environment.
+        MPI_Finalize();
+    }
 
     return 0;
 }
