@@ -9,40 +9,46 @@
 const size_t N = 100000;
 int data[N];
 int main(int argc, char *argv[]) {
-    std::iota(data, data + N, 0);
+    std::iota(data, data + N, 1);
 
-    auto make_splitters = [&](size_t n) {
+    size_t sum = 0;
+    for (size_t i = 0; i < N; ++i) {
+        sum += data[i];
+    }
+    std::cout << "Actual sum: " << sum << std::endl;
+
+    auto make_splitter = [&](size_t n) {
         std::vector<size_t> ends;
         for (size_t i = 0; i <= N; ++i) {
             ends.push_back(i * N / n);
         }
 
-        std::vector<std::function<bool(std::ostream &, size_t)>> splitters;
+        auto splitter = [N = N, n = n, i = size_t(0)](std::ostream &os, size_t node) mutable -> bool {
+            if (i == n) return false;
+            size_t begin = i * N / n;
+            size_t end = (i + 1) * N / n;
+            ++i;
+            os << begin << " " << end << " ";
+            return true;
+        };
 
-        for (size_t i = 0; i < n; ++i) {
-            size_t begin = ends[i], end = ends[i + 1];
-
-            auto split_function = [begin, end](std::ostream &os, size_t node) -> bool {
-                os << begin << " " << end;
-                return false;
-            };
-
-            splitters.push_back(split_function);
-        }
-
-        return splitters;
+        return splitter;
     };
 
     auto process = [&](std::istream &is, std::ostream &os, size_t node) -> void {
         std::cout << "process run" << std::endl;
         long long int sum = 0;
+        int i = 0;
         while (is.peek() != EOF) {
+            std::cout << "Iteration " << ++i << std::endl;
             size_t begin, end;
-            is >> begin >> end;
+            if (!(is >> begin >> end)) break;
+            std::cout << "Extracted range: " << begin << " " << end << std::endl;
             for (size_t i = begin; i < end; ++i) {
                 sum += data[i];
             }
         }
+        std::cout << "Computed sum: " << sum << std::endl;
         os << sum;
     };
 
@@ -58,7 +64,7 @@ int main(int argc, char *argv[]) {
     };
 
     partask::init();
-    auto presult = partask::run(make_splitters, process, reduce);
+    auto presult = partask::run(make_splitter, process, reduce);
     partask::finalize();
 
     if (presult) {

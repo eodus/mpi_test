@@ -12,10 +12,6 @@ if(MPI_FOUND)
   include_directories(${MPI_INCLUDE_PATH})
 endif()
 
-add_executable(mpi_hello_world mpi_hello_world.cpp)
-target_link_libraries(mpi_hello_world ${MPI_LIBRARIES})
-
-
 find_package(OpenMP)
 if (OPENMP_FOUND)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")

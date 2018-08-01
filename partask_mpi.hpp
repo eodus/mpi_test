@@ -85,8 +85,8 @@ public:
     }
 };
 
-template <typename MakeSplitters, typename Process, typename Reduce>
-auto run(MakeSplitters &make_splitters, Process &process, Reduce &reduce) {
+template <typename MakeSplitter, typename Process, typename Reduce>
+auto run(MakeSplitter &make_splitter, Process &process, Reduce &reduce) {
     // Get the rank of the process
     int world_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
@@ -101,46 +101,39 @@ auto run(MakeSplitters &make_splitters, Process &process, Reduce &reduce) {
     const int MAP_TAG = 13;
     const int REDUCE_TAG = 14;
 
-    omp_set_num_threads(1);           // Section works even if we specify num_threads = 1
-    omp_set_num_threads(world_size);  // Section works even if we specify num_threads = 1
-#pragma omp sections
-    {
-        if (world_rank == 0) {
-            auto splitters = make_splitters(world_size);
-            assert(splitters.size() == world_size);
-#pragma omp parallel for
-            for (size_t rank = 0; rank < world_size; ++rank) {
-                auto &splitter = splitters[rank];
-                OutputMPIStream os(rank, MAP_TAG);
-                bool more = false;
-                do {
-                    more = splitter(os, rank);
-                } while (more);
-            }
+    // omp_set_num_threads(1);           // Section works even if we specify num_threads = 1
+    auto plocal_map = std::make_shared<std::stringstream>();
+    auto plocal_reduce = std::make_shared<std::stringstream>();
+    if (world_rank == 0) {
+        std::vector<std::shared_ptr<std::ostream>> oss;
+        oss.push_back(plocal_map);
+        for (size_t rank = 1; rank < world_size; ++rank) {
+            oss.emplace_back(new OutputMPIStream(rank, MAP_TAG));
+        }
+        auto splitter = make_splitter(world_size);
+        for (size_t rank = 0; splitter(*oss[rank], rank); rank = (rank + 1) % world_size) { }
+    }
+
+    std::cout << "plocal_map: " << plocal_map->str() << std::endl;
+
+    if (world_rank == 0) {
+        process(*plocal_map, *plocal_reduce, world_rank);
+    } else {
+        InputMPIStream is(0, MAP_TAG);
+        OutputMPIStream os(0, REDUCE_TAG);
+        process(is, os, world_rank);
+    }
+
+    if (world_rank == 0) {
+        std::vector<std::istream *> piss;
+        std::vector<int> nodes;
+        for (int rank = 0; rank < world_size; ++rank) {
+            std::istream *pis = rank == 0 ? (std::istream*)(plocal_reduce.get()) : (std::istream*)(new InputMPIStream(rank, REDUCE_TAG));
+            piss.push_back(pis);
+            nodes.push_back(rank);
         }
 
-#pragma omp section
-        {
-            InputMPIStream is(0, MAP_TAG);
-            OutputMPIStream os(0, REDUCE_TAG);
-            process(is, os, world_rank);
-        }
-#pragma omp section
-        if (world_rank == 0) {
-            std::vector<std::istream *> piss;
-            std::vector<int> nodes;
-#pragma omp parallel for
-            for (int rank = 0; rank < world_size; ++rank) {
-                auto pis = new InputMPIStream(rank, REDUCE_TAG);
-#pragma omp critical
-                {
-                    piss.push_back(pis);
-                    nodes.push_back(rank);
-                }
-            }
-
-            result.reset(new return_type(reduce(piss, nodes)));
-        }
+        result.reset(new return_type(reduce(piss, nodes)));
     }
     return result;
 }
