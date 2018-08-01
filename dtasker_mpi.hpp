@@ -29,7 +29,7 @@ void broadcast_mpi(T &data, Serialize &serialize, Deserialize &deserialize, int 
     }
 
     // Broadcast object size
-    MPI_Bcast(&size, sizeof(size), MPI_BYTE, root, MPI_COMM_WORLD);
+    MPI_Bcast(&size, sizeof(size), MPI_CHAR, root, MPI_COMM_WORLD);
 
     if (world_rank != root) {
         s.resize(size + 1);
@@ -38,7 +38,7 @@ void broadcast_mpi(T &data, Serialize &serialize, Deserialize &deserialize, int 
     // Broadcast object itself
     const size_t MAX_MPI_COUNT = std::numeric_limits<int>::max();
     assert(size <= MAX_MPI_COUNT);
-    MPI_Bcast(s.data(), size + 1, MPI_BYTE, root, MPI_COMM_WORLD);
+    MPI_Bcast(s.data(), size + 1, MPI_CHAR, root, MPI_COMM_WORLD);
 
     if (world_rank != root) {
         std::stringstream ss(s.data());
@@ -52,8 +52,8 @@ public:
 
     void close() {
         size_t size = this->str().size();
-        MPI_Send(&size, sizeof(size), MPI_BYTE, rank_, tag_, MPI_COMM_WORLD);
-        MPI_Send(const_cast<char *>(this->str().data()), this->str().size(), MPI_BYTE, rank_, tag_, MPI_COMM_WORLD);
+        MPI_Send(&size, sizeof(size), MPI_CHAR, rank_, tag_, MPI_COMM_WORLD);
+        MPI_Send(const_cast<char *>(this->str().data()), this->str().size(), MPI_CHAR, rank_, tag_, MPI_COMM_WORLD);
     }
 
     ~OutputMPIStream() { close(); }
@@ -67,12 +67,19 @@ class InputMPIStream : public std::istringstream {
 public:
     InputMPIStream(int rank, int tag = 0) {
         size_t size;
-        MPI_Recv(&size, sizeof(size), MPI_BYTE, rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+// #pragma omp critical(MPI)
+        {
+        MPI_Recv(&size, sizeof(size), MPI_CHAR, rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
         std::vector<char> s;
         s.resize(size + 1);
         s[size] = '\0';
-        MPI_Recv(s.data(), size, MPI_BYTE, rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+// #pragma omp critical(MPI)
+        {
+        MPI_Recv(s.data(), size, MPI_CHAR, rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
         this->str(s.data());
+        std::cout << "Data recieved: " << this->str() << std::endl;
     }
 };
 
@@ -94,11 +101,12 @@ auto run_mpi(MakeSplitters &make_splitters, Process &process, Reduce &reduce, si
     const int REDUCE_TAG = 14;
 
     omp_set_num_threads(1);  // Section works even if we specify num_threads = 1
+    omp_set_num_threads(n);  // Section works even if we specify num_threads = 1
 #pragma omp sections
     {
         if (world_rank == 0) {
             auto splitters = make_splitters(n);
-#pragma omp parallel
+#pragma omp parallel for
             for (size_t rank = 0; rank < splitters.size(); ++rank) {
                 auto &splitter = splitters[rank];
                 OutputMPIStream os(rank, MAP_TAG);
@@ -119,9 +127,14 @@ auto run_mpi(MakeSplitters &make_splitters, Process &process, Reduce &reduce, si
         if (world_rank == 0) {
             std::vector<std::istream *> piss;
             std::vector<int> nodes;
+#pragma omp parallel for
             for (int rank = 0; rank < n; ++rank) {
-                piss.push_back(new InputMPIStream(rank, REDUCE_TAG));
-                nodes.push_back(rank);
+                auto pis = new InputMPIStream(rank, REDUCE_TAG);
+#pragma omp critical
+                {
+                    piss.push_back(pis);
+                    nodes.push_back(rank);
+                }
             }
 
             result.reset(new return_type(reduce(piss, nodes)));

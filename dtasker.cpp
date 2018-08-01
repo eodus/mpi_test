@@ -9,7 +9,7 @@
 
 const size_t N = 100000;
 int data[N];
-int main() {
+int main(int argc, char *argv[]) {
     std::iota(data, data + N, 0);
 
     auto make_splitters = [&](size_t n) {
@@ -65,7 +65,10 @@ int main() {
 
     {
         // Initialize the MPI environment
-        MPI_Init(NULL, NULL);
+        int provided;
+        MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+        std::cout << "Provided: " << provided << std::endl;
+        // assert(provided >= MPI_THREAD_MULTIPLE);
         // Get the number of processes
         int world_size;
         MPI_Comm_size(MPI_COMM_WORLD, &world_size);
@@ -74,6 +77,10 @@ int main() {
         int world_rank;
         MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
         if (world_rank == 0) {
+            std::cout << "MPI!!!!!!" << std::endl;
+            std::cout << *presult << std::endl;
+        }
+        if (presult) {
             std::cout << "MPI!!!!!!" << std::endl;
             std::cout << *presult << std::endl;
         }
