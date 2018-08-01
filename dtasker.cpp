@@ -4,8 +4,7 @@
 #include <numeric>
 #include <vector>
 
-#include "dtasker.hpp"
-#include "dtasker_mpi.hpp"
+#include "partask_mpi.hpp"
 
 const size_t N = 100000;
 int data[N];
@@ -58,34 +57,13 @@ int main(int argc, char *argv[]) {
         return sum;
     };
 
-    {
-        auto result = run_omp(make_splitters, process, reduce, 4);
-        std::cout << result << std::endl;
-    }
+    partask::init();
+    auto presult = partask::run(make_splitters, process, reduce);
+    partask::finalize();
 
-    {
-        // Initialize the MPI environment
-        int provided;
-        MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
-        std::cout << "Provided: " << provided << std::endl;
-        // assert(provided >= MPI_THREAD_MULTIPLE);
-        // Get the number of processes
-        int world_size;
-        MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-        auto presult = run_mpi(make_splitters, process, reduce, world_size);
-        // Get the rank of the process
-        int world_rank;
-        MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
-        if (world_rank == 0) {
-            std::cout << "MPI!!!!!!" << std::endl;
-            std::cout << *presult << std::endl;
-        }
-        if (presult) {
-            std::cout << "MPI!!!!!!" << std::endl;
-            std::cout << *presult << std::endl;
-        }
-        // Finalize the MPI environment.
-        MPI_Finalize();
+    if (presult) {
+        std::cout << "MPI!!!!!!" << std::endl;
+        std::cout << *presult << std::endl;
     }
 
     return 0;
