@@ -7,9 +7,9 @@
 #include "partask_mpi.hpp"
 
 const size_t N = 100000;
-int data[N];
+std::array<int, N> data;
 int main(int argc, char *argv[]) {
-    std::iota(data, data + N, 1);
+    std::iota(data.begin(), data.end(), 1);
 
     size_t sum = 0;
     for (size_t i = 0; i < N; ++i) {
@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
         os << sum;
     };
 
-    auto reduce = [&](const std::vector<std::istream *> &piss, const std::vector<int> &nodes) {
+    auto reduce = [&](const std::vector<std::istream *> &piss) {
         long long int sum = 0;
         for (auto &pis : piss) {
             long long int local_sum;
@@ -68,7 +68,7 @@ int main(int argc, char *argv[]) {
     partask::finalize();
 
     if (presult) {
-        std::cout << "MPI!!!!!!" << std::endl;
+        // We are on master node
         std::cout << *presult << std::endl;
     }
 

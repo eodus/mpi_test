@@ -95,7 +95,7 @@ auto run(MakeSplitter &make_splitter, Process &process, Reduce &reduce) {
     int world_size;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
-    using return_type = decltype(reduce(std::vector<std::istream *>(), std::vector<int>()));
+    using return_type = decltype(reduce(std::vector<std::istream *>()));
     std::unique_ptr<return_type> result;
 
     const int MAP_TAG = 13;
@@ -130,13 +130,11 @@ auto run(MakeSplitter &make_splitter, Process &process, Reduce &reduce) {
         }
 
         std::vector<std::istream *> piss;
-        std::vector<int> nodes;
         for (int rank = 0; rank < world_size; ++rank) {
             piss.push_back(iss[rank].get());
-            nodes.push_back(rank);
         }
 
-        result.reset(new return_type(reduce(piss, nodes)));
+        result.reset(new return_type(reduce(piss)));
     }
     return result;
 }
