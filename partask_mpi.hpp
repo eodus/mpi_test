@@ -110,11 +110,9 @@ auto run(MakeSplitter &make_splitter, Process &process, Reduce &reduce) {
         for (size_t rank = 1; rank < world_size; ++rank) {
             oss.emplace_back(new OutputMPIStream(rank, MAP_TAG));
         }
-        auto splitter = make_splitter(world_size);
+        auto splitter = make_splitter(world_size * 10);
         for (size_t rank = 0; splitter(*oss[rank], rank); rank = (rank + 1) % world_size) { }
     }
-
-    std::cout << "plocal_map: " << plocal_map->str() << std::endl;
 
     if (world_rank == 0) {
         process(*plocal_map, *plocal_reduce, world_rank);
@@ -125,11 +123,16 @@ auto run(MakeSplitter &make_splitter, Process &process, Reduce &reduce) {
     }
 
     if (world_rank == 0) {
+        std::vector<std::shared_ptr<std::istream>> iss;
+        iss.push_back(plocal_reduce);
+        for (int rank = 1; rank < world_size; ++rank) {
+            iss.emplace_back(new InputMPIStream(rank, REDUCE_TAG));
+        }
+
         std::vector<std::istream *> piss;
         std::vector<int> nodes;
         for (int rank = 0; rank < world_size; ++rank) {
-            std::istream *pis = rank == 0 ? (std::istream*)(plocal_reduce.get()) : (std::istream*)(new InputMPIStream(rank, REDUCE_TAG));
-            piss.push_back(pis);
+            piss.push_back(iss[rank].get());
             nodes.push_back(rank);
         }
 
