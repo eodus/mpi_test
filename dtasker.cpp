@@ -29,19 +29,17 @@ int main(int argc, char *argv[]) {
         std::cout << "process run" << std::endl;
         long long int sum = 0;
 #pragma omp parallel reduction (+:sum)
-        {
-            while (true) {
-                size_t begin, end;
-                bool exit = false;
+        while (true) {
+            size_t begin, end;
+            bool exit = false;
 #pragma omp critical
-                {
-                    if (is.peek() == EOF || !(is >> begin >> end)) exit = true;
-                    if (!exit) std::cout << "Extracted range: " << begin << " " << end << std::endl;
-                }
-                if (exit) break;
-                for (size_t i = begin; i < end; ++i) {
-                    sum += data[i];
-                }
+            {
+                if (is.peek() == EOF || !(is >> begin >> end)) exit = true;
+                if (!exit) std::cout << "Extracted range: " << begin << " " << end << std::endl;
+            }
+            if (exit) break;
+            for (size_t i = begin; i < end; ++i) {
+                sum += data[i];
             }
         }
         std::cout << "Computed sum: " << sum << std::endl;
@@ -60,6 +58,12 @@ int main(int argc, char *argv[]) {
     };
 
     partask::init();
+    partask::all_set_num_threads(10);
+    auto nt = partask::collect_num_threads();
+    if (nt.size()) {
+        std::cout << nt[0] << std::endl;
+    }
+    std::cout << "#threads after all_set: "<< omp_get_max_threads() << std::endl;
     auto presult = partask::run(make_splitter, process, reduce);
     partask::finalize();
 

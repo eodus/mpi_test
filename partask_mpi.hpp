@@ -25,7 +25,7 @@ std::vector<int> collect_num_threads(int root = 0) {
     int world_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-    int num_threads = omp_get_num_threads();
+    int num_threads = omp_get_max_threads();
     if (world_rank == root) {
         int world_size;
         MPI_Comm_size(MPI_COMM_WORLD, &world_size);
@@ -36,6 +36,16 @@ std::vector<int> collect_num_threads(int root = 0) {
         MPI_Gather(&num_threads, 1, MPI_INT, nullptr, 1, MPI_INT, root, MPI_COMM_WORLD);
         return {};
     }
+}
+
+void all_set_num_threads(const std::vector<int> &all_num_threads, int root = 0) {
+    int num_threads;
+    MPI_Scatter(const_cast<int*>(all_num_threads.data()), 1, MPI_INT, &num_threads, 1, MPI_INT, root, MPI_COMM_WORLD);
+    omp_set_num_threads(num_threads);
+}
+
+void all_set_num_threads(int num_threads, int root = 0) {
+    omp_set_num_threads(num_threads);
 }
 
 template <typename T, typename Serialize, typename Deserialize>
@@ -132,6 +142,7 @@ auto run(MakeSplitter &make_splitter, Process &process, Reduce &reduce) {
 
         size_t sum_num_threads = std::accumulate(all_num_threads.cbegin(), all_num_threads.cend(), 0);
         assert(sum_num_threads > 0);
+        std::cout << "All threads: " << sum_num_threads << std::endl;
         auto splitter = make_splitter(sum_num_threads * 10);
 
         auto mult_splitter = [&](auto &os, int rank, size_t count) {
