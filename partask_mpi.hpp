@@ -7,8 +7,11 @@
 #include <memory>
 #include <sstream>
 #include <vector>
+#include <algorithm>
 
 namespace partask {
+
+const size_t MPI_MAX_COUNT = std::numeric_limits<int>::max();
 
 bool init() {
     int provided;
@@ -17,6 +20,23 @@ bool init() {
 }
 
 bool finalize() { return MPI_Finalize() == MPI_SUCCESS; }
+
+std::vector<int> collect_num_threads(int root = 0) {
+    int world_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+    int num_threads = omp_get_num_threads();
+    if (world_rank == root) {
+        int world_size;
+        MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+        std::vector<int> all_num_threads(world_size);
+        MPI_Gather(&num_threads, 1, MPI_INT, all_num_threads.data(), 1, MPI_INT, root, MPI_COMM_WORLD);
+        return all_num_threads;
+    } else {
+        MPI_Gather(&num_threads, 1, MPI_INT, nullptr, 1, MPI_INT, root, MPI_COMM_WORLD);
+        return {};
+    }
+}
 
 template <typename T, typename Serialize, typename Deserialize>
 void broadcast(T &data, Serialize &serialize, Deserialize &deserialize, int root = 0) {
@@ -42,8 +62,7 @@ void broadcast(T &data, Serialize &serialize, Deserialize &deserialize, int root
     }
 
     // Broadcast object itself
-    const size_t MAX_MPI_COUNT = std::numeric_limits<int>::max();
-    assert(size <= MAX_MPI_COUNT);
+    assert(size <= MPI_MAX_COUNT);
     MPI_Bcast(s.data(), size, MPI_CHAR, root, MPI_COMM_WORLD);
 
     if (world_rank != root) {
@@ -58,6 +77,7 @@ public:
 
     void close() {
         size_t size = this->str().size();
+        assert(size <= MPI_MAX_COUNT);
         MPI_Send(&size, sizeof(size), MPI_CHAR, rank_, tag_, MPI_COMM_WORLD);
         MPI_Send(const_cast<char *>(this->str().data()), this->str().size(), MPI_CHAR, rank_, tag_, MPI_COMM_WORLD);
     }
@@ -73,13 +93,12 @@ class InputMPIStream : public std::istringstream {
 public:
     InputMPIStream(int rank, int tag = 0) {
         size_t size;
-        // #pragma omp critical(MPI)
-        { MPI_Recv(&size, sizeof(size), MPI_CHAR, rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE); }
+        MPI_Recv(&size, sizeof(size), MPI_CHAR, rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        assert(size <= MPI_MAX_COUNT);
         std::vector<char> s;
         s.resize(size + 1);
         s[size] = '\0';
-        // #pragma omp critical(MPI)
-        { MPI_Recv(s.data(), size, MPI_CHAR, rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE); }
+        MPI_Recv(s.data(), size, MPI_CHAR, rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         this->str(s.data());
         std::cout << "Data recieved: " << this->str() << std::endl;
     }
@@ -87,11 +106,8 @@ public:
 
 template <typename MakeSplitter, typename Process, typename Reduce>
 auto run(MakeSplitter &make_splitter, Process &process, Reduce &reduce) {
-    // Get the rank of the process
     int world_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
-
-    // Get the number of processes
     int world_size;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
@@ -104,14 +120,30 @@ auto run(MakeSplitter &make_splitter, Process &process, Reduce &reduce) {
     // omp_set_num_threads(1);           // Section works even if we specify num_threads = 1
     auto plocal_map = std::make_shared<std::stringstream>();
     auto plocal_reduce = std::make_shared<std::stringstream>();
+
+    auto all_num_threads = collect_num_threads();
+
     if (world_rank == 0) {
         std::vector<std::shared_ptr<std::ostream>> oss;
         oss.push_back(plocal_map);
         for (size_t rank = 1; rank < world_size; ++rank) {
             oss.emplace_back(new OutputMPIStream(rank, MAP_TAG));
         }
-        auto splitter = make_splitter(world_size * 10);
-        for (size_t rank = 0; splitter(*oss[rank], rank); rank = (rank + 1) % world_size) { }
+
+        size_t sum_num_threads = std::accumulate(all_num_threads.cbegin(), all_num_threads.cend(), 0);
+        assert(sum_num_threads > 0);
+        auto splitter = make_splitter(sum_num_threads * 10);
+
+        auto mult_splitter = [&](auto &os, int rank, size_t count) {
+            for (size_t i = 0; i < count; ++i) {
+                bool result = splitter(os, rank);
+                if (!result) return false;
+            }
+            return true;
+        };
+
+        for (size_t rank = 0; mult_splitter(*oss[rank], rank, all_num_threads[rank]); rank = (rank + 1) % world_size) {
+        }
     }
 
     if (world_rank == 0) {
