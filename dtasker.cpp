@@ -5,6 +5,64 @@
 
 #include "partask_mpi.hpp"
 
+class ArraySum {
+public:
+    ArraySum() = default;
+
+    ArraySum(std::istream &) {}
+
+    std::ostream &serialize(std::ostream &os) const { return os; }
+
+    template <typename World>
+    auto make_splitter(size_t n, World &world) {
+        size_t N = world.size();
+        auto splitter = [N = N, n = n, i = size_t(0)](std::ostream &os, size_t node) mutable -> bool {
+            if (i == n) return false;
+            size_t begin = i * N / n;
+            size_t end = (i + 1) * N / n;
+            ++i;
+            os << begin << " " << end << " ";
+            return true;
+        };
+
+        return splitter;
+    };
+
+    template <typename World>
+    void process(std::istream &is, std::ostream &os, int node, World &world) {
+        std::cout << "process run" << std::endl;
+        long long int sum = 0;
+#pragma omp parallel reduction(+ : sum)
+        while (true) {
+            size_t begin, end;
+            bool exit = false;
+#pragma omp critical
+            {
+                if (is.peek() == EOF || !(is >> begin >> end)) exit = true;
+                if (!exit) std::cout << "Extracted range: " << begin << " " << end << std::endl;
+            }
+            if (exit) break;
+            for (size_t i = begin; i < end; ++i) {
+                sum += world[i];
+            }
+        }
+        std::cout << "Computed sum: " << sum << std::endl;
+        os << sum;
+    }
+
+    template <typename World>
+    auto reduce(const std::vector<std::istream *> &piss, World &world) {
+        long long int sum = 0;
+        for (auto &pis : piss) {
+            long long int local_sum;
+            *pis >> local_sum;
+            sum += local_sum;
+        }
+
+        return sum;
+    };
+};
+
 const size_t N = 100000;
 std::array<int, N> data;
 int main(int argc, char *argv[]) {
@@ -63,7 +121,7 @@ int main(int argc, char *argv[]) {
         partask::all_set_num_threads(1);
 
         partask::TaskRegistry reg;
-        auto job = reg.add<partask::Task>(std::cref(data));
+        auto job = reg.add<ArraySum>(std::cref(data));
         // auto job = reg.add<partask::Task>(data);
         if (reg.world_rank() == 0) {
             auto res = job();
