@@ -58,19 +58,40 @@ int main(int argc, char *argv[]) {
     };
 
     partask::init();
-    partask::all_set_num_threads(10);
-    auto nt = partask::collect_num_threads();
-    if (nt.size()) {
-        std::cout << nt[0] << std::endl;
+
+    {
+        partask::all_set_num_threads(1);
+
+        partask::TaskRegistry reg;
+        auto job = reg.add<partask::Task>(std::cref(data));
+        // auto job = reg.add<partask::Task>(data);
+        if (reg.world_rank() == 0) {
+            auto res = job();
+            std::cout << "JOB RESULT: " << res << std::endl;
+            res = job();
+            std::cout << "JOB RESULT: " << res << std::endl;
+            res = job();
+            std::cout << "JOB RESULT: " << res << std::endl;
+            res = job();
+            std::cout << "JOB RESULT: " << res << std::endl;
+        } else {
+            reg.listen();
+        }
     }
-    std::cout << "#threads after all_set: "<< omp_get_max_threads() << std::endl;
-    auto presult = partask::run(make_splitter, process, reduce);
+
+
+    // partask::all_set_num_threads(10);
+    // auto nt = partask::collect_num_threads();
+    // if (nt.size()) {
+    //     std::cout << nt[0] << std::endl;
+    // }
+    // std::cout << "#threads after all_set: "<< omp_get_max_threads() << std::endl;
+    // auto presult = partask::run(make_splitter, process, reduce);
+    // if (presult) {
+    //     // We are on master node
+    //     std::cout << *presult << std::endl;
+    // }
+
     partask::finalize();
-
-    if (presult) {
-        // We are on master node
-        std::cout << *presult << std::endl;
-    }
-
     return 0;
 }
