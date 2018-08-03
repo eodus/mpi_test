@@ -86,7 +86,7 @@ int main(int argc, char *argv[]) {
     auto process = [&](std::istream &is, std::ostream &os, size_t node) -> void {
         std::cout << "process run" << std::endl;
         long long int sum = 0;
-#pragma omp parallel reduction (+:sum)
+#pragma omp parallel reduction(+ : sum)
         while (true) {
             size_t begin, end;
             bool exit = false;
@@ -123,7 +123,9 @@ int main(int argc, char *argv[]) {
         partask::TaskRegistry reg;
         auto job = reg.add<ArraySum>(std::cref(data));
         // auto job = reg.add<partask::Task>(data);
-        if (reg.world_rank() == 0) {
+        reg.listen();
+
+        if (reg.master()) {
             auto res = job();
             std::cout << "JOB RESULT: " << res << std::endl;
             res = job();
@@ -132,11 +134,26 @@ int main(int argc, char *argv[]) {
             std::cout << "JOB RESULT: " << res << std::endl;
             res = job();
             std::cout << "JOB RESULT: " << res << std::endl;
-        } else {
-            reg.listen();
         }
-    }
 
+        reg.stop();
+        auto job2 = reg.add<ArraySum>(std::cref(data));
+        reg.listen();
+        if (reg.master()) {
+            auto res = job();
+            std::cout << "JOB RESULT: " << res << std::endl;
+            res = job2();
+            std::cout << "JOB RESULT: " << res << std::endl;
+            res = job();
+            std::cout << "JOB RESULT: " << res << std::endl;
+            res = job();
+            std::cout << "JOB RESULT: " << res << std::endl;
+        }
+
+        reg.stop();
+        reg.stop();
+        reg.stop();
+    }
 
     // partask::all_set_num_threads(10);
     // auto nt = partask::collect_num_threads();

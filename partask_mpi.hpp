@@ -210,40 +210,48 @@ auto run(MakeSplitter &make_splitter, Process &process, Reduce &reduce) {
     return result;
 }
 
-template <typename Function, typename Tuple, size_t... I>
-auto call(Function& f, Tuple t, std::index_sequence<I...>) {
-    return f(std::get<I>(t)...);
+namespace detail {
+template <class F, class Tuple, std::size_t... I>
+constexpr decltype(auto) apply_impl(F &&f, Tuple &&t, std::index_sequence<I...>) {
+    return std::forward<F>(f)(std::get<I>(std::forward<Tuple>(t))...);
 }
+}  // namespace detail
 
-template <typename Function, typename Tuple>
-auto call(Function& f, Tuple t) {
-    static constexpr auto size = std::tuple_size<Tuple>::value;
-    return call(f, t, std::make_index_sequence<size>{});
+template <class T>
+constexpr std::size_t tuple_size_v = std::tuple_size<T>::value;
+
+template <class F, class Tuple>
+constexpr decltype(auto) apply(F &&f, Tuple &&t) {
+    return detail::apply_impl(std::forward<F>(f), std::forward<Tuple>(t),
+                              std::make_index_sequence<tuple_size_v<std::remove_reference_t<Tuple>>>{});
 }
 
 class TaskRegistry {
-public:
-    std::vector<int> all_num_threads_;
-    TaskRegistry() {
-        MPI_Comm_rank(MPI_COMM_WORLD, &world_rank_);
-        all_num_threads_ = collect_num_threads();
-    }
-
     static const int MAP_TAG = 13;
     static const int REDUCE_TAG = 14;
+    static const size_t MULT = 1;
+    using process_function = std::function<void(std::istream &, std::ostream &, int)>;
+    using init_function = std::function<process_function(std::istream &)>;
+
+public:
+    TaskRegistry() {
+        MPI_Comm_rank(MPI_COMM_WORLD, &world_rank_);
+        MPI_Comm_size(MPI_COMM_WORLD, &world_size_);
+        all_num_threads_ = collect_num_threads();
+    }
 
     template <typename Task, typename World>
     class Job {
     public:
-        Job(TaskRegistry &task_registry, size_t job_id, World &world) : task_registry_{task_registry},
-            world_{world}, job_id_{job_id} {}
+        Job(TaskRegistry &task_registry, size_t job_id, World &&world)
+            : task_registry_{task_registry}, world_{world}, job_id_{job_id} {}
 
         template <typename... Args>
-        auto operator()(Args &&... args) {
+        auto operator()(Args &&... args) const {
             assert(task_registry_.world_rank_ == 0);
             Task task(std::forward<Args>(args)...);
 
-            task_registry_.job_send(job_id_);
+            task_registry_.job_broadcast_(job_id_);
             std::stringstream ss;
             task.serialize(ss);
             std::string s = ss.str();
@@ -265,12 +273,15 @@ public:
                 size_t sum_num_threads = std::accumulate(all_num_threads_.cbegin(), all_num_threads_.cend(), 0);
                 assert(sum_num_threads > 0);
                 std::cout << "All threads: " << sum_num_threads << std::endl;
-                const size_t MULT = 1;
                 auto make_splitter_args = std::tuple_cat(std::make_tuple(sum_num_threads * MULT), world_);
-                auto make_splitter = [&](auto&&... ts) {return task.make_splitter(std::forward<decltype(ts)>(ts)...);};
-                auto splitter = call(make_splitter, make_splitter_args);
+                // auto make_splitter = [&](auto &&... ts) {
+                //     return task.make_splitter(std::forward<decltype(ts)>(ts)...);
+                // };
+                auto splitter =
+                    apply([&](auto &&... ts) { return task.make_splitter(std::forward<decltype(ts)>(ts)...); },
+                          make_splitter_args);
 
-                auto mult_splitter = [&](auto &os, int rank, size_t count) {
+                auto mult_splitter = [&splitter](auto &os, int rank, size_t count) {
                     for (size_t i = 0; i < count; ++i) {
                         bool result = splitter(os, rank);
                         if (!result) return false;
@@ -281,11 +292,12 @@ public:
                 for (size_t rank = 0; mult_splitter(*oss[rank], rank, all_num_threads_[rank]);
                      rank = (rank + 1) % world_size) {
                 }
-            } // close streams here
+            }  // close streams here and send split data
 
-            auto process_args = std::tuple_cat(std::tuple<std::istream&, std::ostream&, int>(*plocal_map, *plocal_reduce, 0), world_);
-            auto process = [&](auto&&... ts) {return task.process(std::forward<decltype(ts)>(ts)...);};
-            call(process, process_args);
+            auto process_args =
+                std::tuple_cat(std::tuple<std::istream &, std::ostream &, int>(*plocal_map, *plocal_reduce, 0), world_);
+            auto process = [&](auto &&... ts) { return task.process(std::forward<decltype(ts)>(ts)...); };
+            apply(process, process_args);
 
             std::vector<std::shared_ptr<std::istream>> iss;
             iss.push_back(plocal_reduce);
@@ -298,31 +310,28 @@ public:
                 piss.push_back(iss[rank].get());
             }
 
-            auto reduce = [&](auto&&... ts) {return task.reduce(std::forward<decltype(ts)>(ts)...);};
+            auto reduce = [&](auto &&... ts) { return task.reduce(std::forward<decltype(ts)>(ts)...); };
             auto reduce_args = std::tuple_cat(std::make_tuple(piss), world_);
-            return call(reduce, reduce_args);
+            return apply(reduce, reduce_args);
         }
 
     private:
         TaskRegistry &task_registry_;
-        World world_;
         size_t job_id_;
+        World world_;
     };
-
-    using process_function = std::function<void(std::istream &, std::ostream &, int)>;
-    using init_function = std::function<process_function(std::istream &)>;
 
     template <typename Task, typename... WorldArgs>
     auto add(WorldArgs... world_args) {
         auto world = std::make_tuple(world_args...);  // unwrap ref/cref
         init_function init = [world](std::istream &is) -> process_function {
-            std::shared_ptr<Task> ptask = std::make_shared<Task>(is);
+            auto ptask = std::make_shared<Task>(is);
 
-            process_function process = [world, ptask = std::move(ptask)](std::istream &is, std::ostream &os,
-                                                                                            int rank) -> void {
-                auto args = std::tuple_cat(std::tuple<std::istream&, std::ostream&, int>(is, os, rank), world);
-                auto pcall = [&](auto&&... ts) {return ptask->process(std::forward<decltype(ts)>(ts)...);};
-                call(pcall, args);
+            process_function process = [world = std::move(world), ptask = std::move(ptask)](
+                                           std::istream &is, std::ostream &os, int rank) -> void {
+                auto args = std::tuple_cat(std::tuple<std::istream &, std::ostream &, int>(is, os, rank), world);
+                auto pcall = [&](auto &&... ts) { return ptask->process(std::forward<decltype(ts)>(ts)...); };
+                apply(pcall, args);
             };
 
             return process;
@@ -330,27 +339,31 @@ public:
 
         size_t job_id = inits_.size();
         inits_.push_back(init);
-        return Job<Task, decltype(world)>(*this, job_id, world);
+        return Job<Task, decltype(world)>(*this, job_id, std::move(world));
     }
 
     init_function get_init(size_t id) { return inits_[id]; }
 
     void stop() {
-        assert(world_rank_ == 0);
-        job_send(size_t(-1));
+        if (slave()) return;
+        if (listening_) {
+            job_broadcast_(size_t(-1));
+            listening_ = false;
+        }
     }
 
-    int world_rank() const {
-        return world_rank_;
+    bool listening() const {
+        return listening_;
     }
 
-    void job_send(size_t job_id) {
-        assert(world_rank_ == 0);
-        MPI_Bcast(&job_id, sizeof(job_id), MPI_CHAR, 0, MPI_COMM_WORLD);
-    }
+    int world_rank() const { return world_rank_; }
 
     void listen() {
-        assert(world_rank_ != 0);
+        if (master()) {
+            assert(!listening_);
+            listening_ = true;
+            return;
+        }
         std::cout << "Listening started" << std::endl;
         while (true) {
             size_t job_id;
@@ -379,9 +392,25 @@ public:
         if (world_rank_ == 0) stop();
     }
 
+    bool master() const { return world_rank() == 0; }
+
+    bool slave() const { return !master(); }
+
+    int world_size() const { return world_size_; }
+
 private:
-    std::vector<init_function> inits_;
     int world_rank_;
+    int world_size_;
+    std::vector<int> all_num_threads_;
+
+    std::vector<init_function> inits_;
+
+    bool listening_ = false;
+
+    void job_broadcast_(size_t job_id) {
+        assert(world_rank_ == 0);
+        MPI_Bcast(&job_id, sizeof(job_id), MPI_CHAR, 0, MPI_COMM_WORLD);
+    }
 };
 
 }  // namespace partask
